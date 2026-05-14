@@ -47,13 +47,6 @@ public class SocketConnection : IDisposable
             var eventIdBytes = BitConverter.GetBytes(eventId);
             var lengthBytes = BitConverter.GetBytes(payload.Length);
 
-            // Convert to big-endian
-            if (BitConverter.IsLittleEndian)
-            {
-                Array.Reverse(eventIdBytes);
-                Array.Reverse(lengthBytes);
-            }
-
             var fullMessage = new byte[6 + payload.Length];
             Buffer.BlockCopy(eventIdBytes, 0, fullMessage, 0, 2);
             Buffer.BlockCopy(lengthBytes, 0, fullMessage, 2, 4);
@@ -78,17 +71,11 @@ public class SocketConnection : IDisposable
                 var eventIdBytes = await ReadExactAsync(2, ct);
                 if (eventIdBytes == null) break;
 
-                if (BitConverter.IsLittleEndian)
-                    Array.Reverse(eventIdBytes);
-
                 ushort eventId = BitConverter.ToUInt16(eventIdBytes, 0);
 
                 // Read payload length (4 bytes)
                 var lengthBytes = await ReadExactAsync(4, ct);
                 if (lengthBytes == null) break;
-
-                if (BitConverter.IsLittleEndian)
-                    Array.Reverse(lengthBytes);
 
                 int payloadLength = BitConverter.ToInt32(lengthBytes, 0);
 
