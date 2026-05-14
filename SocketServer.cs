@@ -26,12 +26,24 @@ public class SocketServer : IDisposable
     public int ActiveConnections => _connections.Count;
     public IReadOnlyCollection<SocketConnection> Connections => (IReadOnlyCollection<SocketConnection>)_connections.Values;
 
+    public ErrorReportingMode ErrorReportingMode
+    {
+        get;
+        set
+        {
+            field = value;
+            _handlerRegistry.ErrorReportingMode = value;
+        }
+    } = ErrorReportingMode.Limited;
+    
+    public const ushort ErrorEventId = 0xFFFF;
+
     public SocketServer(string host, int port, ISerializer? serializer = null)
     {
         _host = host;
         _port = port;
         _serializer = serializer ?? new JsonSerializer();
-        _handlerRegistry = new HandlerRegistry(_serializer);
+        _handlerRegistry = new HandlerRegistry(_serializer, ErrorReportingMode);
 
         ValidateHostAndPort();
     }

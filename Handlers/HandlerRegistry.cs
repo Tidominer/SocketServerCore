@@ -10,10 +10,12 @@ public class HandlerRegistry
 {
     private readonly ConcurrentDictionary<ushort, HandlerMethod> _handlers = new();
     private readonly ISerializer _serializer;
+    internal ErrorReportingMode ErrorReportingMode;
 
-    public HandlerRegistry(ISerializer serializer)
+    public HandlerRegistry(ISerializer serializer, ErrorReportingMode errorReportingMode)
     {
         _serializer = serializer;
+        ErrorReportingMode = errorReportingMode;
     }
 
     public void RegisterHandlers<T>() where T : class, new()
@@ -180,13 +182,21 @@ public class HandlerRegistry
             throw new InvalidOperationException($"Failed to deserialize request to {handler.RequestType!.Name}");
         }
 
-        // Invoke handler
-        var result = await InvokeHandlerCore(handler, connectionParameter, request);
-
-        // Send response if handler returns data
-        if (result != null && handler.ResponseType != null)
+        try
         {
-            await connection.SendAsync(handler.EventId, result);
+            // Invoke handler
+            var result = await InvokeHandlerCore(handler, connectionParameter, request);
+
+            // Send response if handler returns data
+            if (result != null && handler.ResponseType != null)
+            {
+                await connection.SendAsync(handler.EventId, result);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SocketServer] Error in handler {handler.MethodInfo.Name}: {ex.Message}\nPayload: {System.Text.Encoding.UTF8.GetString(data)}");
+            await SendErrorResponseAsync(connection, ex);
         }
     }
 
@@ -230,5 +240,28 @@ public class HandlerRegistry
             Console.WriteLine($"[SocketServer] Error invoking handler {handler.MethodInfo.Name}: {ex.Message}");
             throw;
         }
+    }
+
+    private async Task SendErrorResponseAsync(SocketConnection connection, Exception exception)
+    {
+        if (ErrorReportingMode == ErrorReportingMode.None)
+            return;
+
+        var errorResponse = new ErrorResponse();
+
+        switch (ErrorReportingMode)
+        {
+            case ErrorReportingMode.Limited:
+                errorResponse.ErrorType = "InternalServerError";
+                errorResponse.Message = "An error occurred while processing your request";
+                break;
+
+            case ErrorReportingMode.Full:
+                errorResponse.ErrorType = exception.GetType().Name;
+                errorResponse.Message = exception.Message;
+                break;
+        }
+
+        await connection.SendAsync(SocketServer.ErrorEventId, errorResponse);
     }
 }
