@@ -14,7 +14,7 @@ A high-performance, event-driven TCP socket server framework for .NET 10.0. Sock
 - **Flexible Protocol Support**: Binary protocol with pluggable serialization (JSON, Protocol Buffers, MessagePack, etc.)
 - **Async/Await Support**: Full async/await support for scalable I/O operations
 - **Connection Management**: Built-in connection lifecycle management and automatic cleanup
-- **Broadcast Messaging**: Easy-to-use APIs for broadcasting to all or specific clients
+- **Error Reporting**: Configurable error reporting modes for secure client communication
 - **Cross-Platform**: Runs on Windows, Linux, and macOS with .NET 10.0
 
 ## Installation
@@ -39,21 +39,48 @@ dotnet add package SocketServerCore
 
 ## Quick Start
 
-### 1. Create a Simple Server
+### 1. Create Request/Response Types
+
+```csharp
+using SocketServerCore;
+
+// Request types
+public class LoginRequest
+{
+    public string Username { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+}
+
+public class ChatMessage
+{
+    public string Sender { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+}
+
+// Response types
+public class LoginResponse
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+}
+
+// Custom user connection for authenticated users
+public class AuthenticatedUser
+{
+    public string Username { get; set; } = string.Empty;
+    public string[] Roles { get; set; } = Array.Empty<string>();
+}
+```
+
+### 2. Define Your Handlers
 
 ```csharp
 using SocketServerCore;
 using SocketServerCore.Attributes;
-using SocketServerCore.Serialization;
 
-// Define your request/response types
-public record LoginRequest(string Username, string Password);
-public record LoginResponse(bool Success, string Message);
-public record ChatMessage(string Sender, string Content);
-
-// Define your handlers
 public class MyServerHandlers
 {
+    // Public handler - anyone can call
     [EventHandler(0x0001)]
     public LoginResponse Login(SocketConnection connection, LoginRequest request)
     {
@@ -64,41 +91,76 @@ public class MyServerHandlers
         {
             connection.User = new AuthenticatedUser 
             { 
-                Username = request.Username 
+                Username = request.Username,
+                Roles = new[] { "User" }
             };
         }
         
-        return new LoginResponse(isValid, isValid ? "Welcome!" : "Invalid credentials");
+        return new LoginResponse 
+        { 
+            Success = isValid, 
+            Message = isValid ? "Welcome!" : "Invalid credentials" 
+        };
     }
 
+    // Authenticated handler - requires connection.User to be AuthenticatedUser
     [EventHandler(0x0002)]
-    public async Task ChatMessage(AuthenticatedUser connection, ChatMessage message)
+    public void SendMessage(AuthenticatedUser connection, ChatMessage message)
     {
-        // Broadcast to all connected clients
-        await _server.BroadcastAsync(0x0003, message);
+        Console.WriteLine($"{connection.Username}: {message.Content}");
+        
+        // Process message (fire-and-forget, no response)
     }
 }
 ```
 
-### 2. Start the Server
+### 3. Start the Server
 
 ```csharp
-var server = new SocketServerBuilder()
-    .WithPort(8080)
-    .WithSerializer<JsonSerializer>() // or use custom serializer
-    .WithHandler<MyServerHandlers>()
-    .Build();
+using SocketServerCore;
+using SocketServerCore.Serialization;
 
+// Create server with JSON serialization
+var server = new SocketServer("127.0.0.1", 9000, new JsonSerializer());
+
+// Register handler classes
+server.RegisterHandlers<MyServerHandlers>();
+
+// Optional: Set error reporting mode
+server.ErrorReportingMode = ErrorReportingMode.Limited;
+
+// Set up event handlers
+server.OnClientConnected = (connection) =>
+{
+    Console.WriteLine($"Client connected: {connection.RemoteEndPoint}");
+};
+
+server.OnClientDisconnected = (connection) =>
+{
+    Console.WriteLine($"Client disconnected: {connection.RemoteEndPoint}");
+};
+
+// Start the server
 await server.StartAsync();
-Console.WriteLine("Server started on port 8080");
+Console.WriteLine("Server started on 127.0.0.1:9000");
+
+// Keep server running
+Console.WriteLine("Press any key to stop...");
+Console.ReadKey();
+
+// Stop the server
+await server.StopAsync();
 ```
 
-### 3. Connect and Send Messages
+## Message Protocol
 
 The server uses a binary protocol with the following format:
 - **Event ID**: 2 bytes (ushort) - identifies the message type
 - **Payload Length**: 4 bytes (int) - length of the serialized payload  
-- **Payload**: N bytes - serialized data
+- **Payload**: N bytes - serialized data (JSON by default)
+
+**Reserved Event IDs:**
+- `0xFFFF` - Error responses (framework-reserved)
 
 ## Usage
 
@@ -109,13 +171,13 @@ Handlers are registered using the `[EventHandler(ushort eventId)]` attribute:
 ```csharp
 public class GameHandlers
 {
-    // Public handler - anyone can call
+    // Public handler - anyone can call (SocketConnection parameter)
     [EventHandler(0x0100)]
     public ConnectionInfo Connect(SocketConnection connection, ConnectRequest request)
     {
         var user = new AuthenticatedUser { Username = request.Username };
         connection.User = user;
-        return new ConnectionInfo(user.Username, GetServerTime());
+        return new ConnectionInfo(user.Username, DateTime.UtcNow);
     }
 
     // Authenticated handler - requires connection.User to be AuthenticatedUser
@@ -130,7 +192,17 @@ public class GameHandlers
     [EventHandler(0x0300)]
     public void HandleHeartbeat(SocketConnection connection, HeartbeatRequest request)
     {
-        connection.LastActivity = DateTime.UtcNow;
+        Console.WriteLine($"Heartbeat from {connection.RemoteEndPoint}");
+        // No response sent
+    }
+
+    // Async handler with response
+    [EventHandler(0x0400)]
+    public async Task<PlayerStats> GetStats(AuthenticatedUser connection, GetStatsRequest request)
+    {
+        // Simulate async database operation
+        await Task.Delay(100);
+        return await database.GetPlayerStats(connection.Username);
     }
 }
 ```
@@ -138,36 +210,44 @@ public class GameHandlers
 ### Server Configuration
 
 ```csharp
-var server = new SocketServerBuilder()
-    .WithPort(8080)                    // Set server port
-    .WithSerializer<JsonSerializer>()   // Set serialization format
-    .WithHandler<GameHandlers>()        // Add handler class
-    .WithHandler<ChatHandlers>()        // Add multiple handler classes
-    .WithMaxConnections(1000)           // Set max concurrent connections
-    .WithBufferSize(8192)               // Set buffer size
-    .Build();
+// Create server with custom settings
+var server = new SocketServer("127.0.0.1", 9000, new JsonSerializer())
+{
+    // Configure error reporting
+    ErrorReportingMode = ErrorReportingMode.Limited
+};
+
+// Register multiple handler classes
+server.RegisterHandlers<GameHandlers>();
+server.RegisterHandlers<ChatHandlers>();
+server.RegisterHandlers<AdminHandlers>();
+
+// Set up event handlers
+server.OnClientConnected = (connection) =>
+{
+    Console.WriteLine($"Connected: {connection.RemoteEndPoint}");
+};
+
+server.OnClientDisconnected = (connection) =>
+{
+    Console.WriteLine($"Disconnected: {connection.RemoteEndPoint}");
+};
 ```
 
 ### Connection Management
 
 ```csharp
+// Send to specific client by ID
+await server.SendAsync(connectionId, 0x0100, data);
+
 // Get all connections
 var allConnections = server.Connections;
 
-// Send to specific client
-await server.SendAsync(connectionId, eventId, data);
-
-// Broadcast to all clients
-await server.BroadcastAsync(eventId, data);
-
-// Get specific connection
-if (server.TryGetConnection(connectionId, out var connection))
+// Send to specific connection object
+foreach (var connection in server.Connections)
 {
-    await connection.SendAsync(eventId, data);
+    await connection.SendAsync(0x0200, broadcastData);
 }
-
-// Disconnect client
-await server.DisconnectAsync(connectionId);
 ```
 
 ### Custom Serialization
@@ -175,23 +255,99 @@ await server.DisconnectAsync(connectionId);
 Implement the `ISerializer` interface for custom serialization:
 
 ```csharp
+using SocketServerCore.Serialization;
+
 public class MessagePackSerializer : ISerializer
 {
-    public T Deserialize<T>(byte[] data)
+    public string ContentType => "application/msgpack";
+    
+    public byte[] Serialize<T>(T data)
+    {
+        return MessagePackSerializer.Serialize(data);
+    }
+
+    public T Deserialize<T>(ReadOnlySpan<byte> data)
     {
         return MessagePackSerializer.Deserialize<T>(data);
     }
 
-    public byte[] Serialize<T>(T obj)
+    public object? Deserialize(Type type, ReadOnlySpan<byte> data)
     {
-        return MessagePackSerializer.Serialize(obj);
+        return MessagePackSerializer.Deserialize(type, data);
     }
 }
 
-// Use in server builder
-var server = new SocketServerBuilder()
-    .WithSerializer<MessagePackSerializer>()
-    .Build();
+// Use in server constructor
+var server = new SocketServer("127.0.0.1", 9000, new MessagePackSerializer());
+```
+
+## Error Handling
+
+### Error Reporting Modes
+
+Configure how much error information is sent to clients:
+
+```csharp
+public enum ErrorReportingMode
+{
+    None,       // No error responses sent
+    Limited,    // Generic "Internal Server Error"
+    Full        // Exception type, message, and stack trace
+}
+```
+
+### Usage Examples
+
+```csharp
+// Development - detailed errors
+var devServer = new SocketServer("127.0.0.1", 9000)
+{
+    ErrorReportingMode = ErrorReportingMode.Full
+};
+
+// Production - limited error exposure
+var prodServer = new SocketServer("0.0.0.0", 9000)
+{
+    ErrorReportingMode = ErrorReportingMode.Limited
+};
+
+// High-security - no error details
+var secureServer = new SocketServer("0.0.0.0", 9000)
+{
+    ErrorReportingMode = ErrorReportingMode.None
+};
+```
+
+### Throwing Exceptions in Handlers
+
+```csharp
+[EventHandler(0x0001)]
+public UserProfileResponse GetUserProfile(AuthenticatedUser connection, GetUserProfileRequest request)
+{
+    var user = database.GetUser(request.Username);
+    if (user == null)
+    {
+        throw new NotFoundException($"User {request.Username} not found");
+    }
+    return new UserProfileResponse { User = user };
+}
+
+[EventHandler(0x0002)]
+public async Task<LoginResponse> Login(AuthenticatedUser connection, LoginRequest request)
+{
+    if (string.IsNullOrEmpty(request.Password))
+    {
+        throw new ValidationException("Password cannot be empty");
+    }
+    
+    var user = await authService.ValidateUser(request.Username, request.Password);
+    if (user == null)
+    {
+        throw new UnauthorizedException("Invalid credentials");
+    }
+    
+    return new LoginResponse { Token = user.Token };
+}
 ```
 
 ## Event ID Conventions
@@ -199,10 +355,11 @@ var server = new SocketServerBuilder()
 Event IDs are `ushort` values (0x0000-0xFFFF) organized by functionality:
 
 - **0x0000-0x00FF**: System/Core operations
-- **0x0100-0x01FF**: Authentication/Authorization
+- **0x0100-0x01FF**: Authentication/Authorization  
 - **0x0200-0x02FF**: Game-specific operations
 - **0x0300-0x03FF**: Chat/Messaging
-- **0x0400-0xFFFF**: Application-specific
+- **0x0400-0xFFFE**: Application-specific
+- **0xFFFF**: Framework reserved (Error responses)
 
 ## API Reference
 
@@ -211,28 +368,53 @@ Event IDs are `ushort` values (0x0000-0xFFFF) organized by functionality:
 #### SocketServer
 Main server class that manages TCP listener, client connections, and message routing.
 
+**Constructor:**
+- `SocketServer(string host, int port, ISerializer? serializer = null)`
+
 **Methods:**
-- `StartAsync()` - Start the server
-- `StopAsync()` - Stop the server
-- `SendAsync(Guid connectionId, ushort eventId, object data)` - Send to specific client
-- `BroadcastAsync(ushort eventId, object data)` - Broadcast to all clients
-- `DisconnectAsync(Guid connectionId)` - Disconnect a client
+- `RegisterHandlers<T>()` - Register handler class
+- `StartAsync(CancellationToken)` - Start the server
+- `StopAsync()` - Stop the server  
+- `SendAsync<T>(Guid connectionId, ushort eventId, T data)` - Send to specific client
+- `Dispose()` - Clean up resources
+
+**Properties:**
+- `IsRunning` - Server status
+- `ActiveConnections` - Number of connected clients
+- `Connections` - Read-only collection of all connections
+- `ErrorReportingMode` - Error reporting configuration
+
+**Events:**
+- `OnClientConnected` - Raised when client connects
+- `OnClientDisconnected` - Raised when client disconnects
 
 #### SocketConnection
 Represents individual client connections with send/receive capabilities.
 
 **Properties:**
-- `Id` - Unique connection identifier
+- `Id` - Unique connection identifier (Guid)
 - `User` - Authenticated user object
-- `Connected` - Connection status
-- `LastActivity` - Timestamp of last activity
+- `IsConnected` - Connection status
+- `RemoteEndPoint` - Client address and port
+- `ConnectedAt` - Connection timestamp
 
 **Methods:**
 - `SendAsync<T>(ushort eventId, T data)` - Send message to client
-- `DisconnectAsync()` - Close the connection
+- `Dispose()` - Close the connection
 
-#### HandlerRegistry
-Central handler discovery and invocation system using reflection and delegates.
+#### ErrorReportingMode
+Controls error information sent to clients when handlers throw exceptions.
+
+**Values:**
+- `None` - No error responses
+- `Limited` - Generic error messages only
+- `Full` - Complete error details
+
+#### SystemEventIds
+Reserved system event IDs used by the framework.
+
+**Constants:**
+- `Error = 0xFFFF` - Error response event ID
 
 ## Advanced Examples
 
@@ -242,7 +424,7 @@ Central handler discovery and invocation system using reflection and delegates.
 public class AuthUser 
 {
     public string Username { get; set; }
-    public string[] Roles { get; set; }
+    public string[] Roles { get; set; } = Array.Empty<string>();
 }
 
 public class AuthHandlers
@@ -266,7 +448,7 @@ public class AuthHandlers
     }
 
     [EventHandler(0x0101)]
-    public void AdminCommand(AuthUser connection, AdminRequest request)
+    public async Task AdminCommand(AuthUser connection, AdminRequest request)
     {
         // Only accessible if connection.User is AuthUser
         if (!connection.Roles.Contains("Admin"))
@@ -275,43 +457,48 @@ public class AuthHandlers
         }
         
         // Process admin command
+        await ProcessAdminCommand(request);
     }
 }
 ```
 
-### Real-time Game Server
+### Real-time Chat Server
 
 ```csharp
-public class GameHandlers
+public class ChatHandlers
 {
-    private readonly GameState _gameState = new();
+    private readonly SocketServer _server;
 
-    [EventHandler(0x0200)]
-    public PlayerState JoinGame(AuthUser connection, JoinRequest request)
+    public ChatHandlers(SocketServer server)
     {
-        var player = _gameState.AddPlayer(connection.Username, request.Position);
-        return player;
+        _server = server;
     }
 
-    [EventHandler(0x0201)]
-    public async Task<GameUpdate> MovePlayer(AuthUser connection, MoveRequest request)
+    [EventHandler(0x0300)]
+    public void SendMessage(AuthUser connection, ChatMessage message)
     {
-        var player = _gameState.MovePlayer(connection.Username, request.Destination);
+        Console.WriteLine($"{connection.Username}: {message.Content}");
         
-        // Broadcast movement to all players
-        await _server.BroadcastAsync(0x0202, new PlayerMovedEvent
+        // Broadcast to all connected clients
+        foreach (var conn in _server.Connections)
         {
-            PlayerId = connection.Username,
-            Position = request.Destination
-        });
-        
-        return player;
-    }
-
-    [EventHandler(0x0203)]
-    public void PlayerAction(AuthUser connection, ActionRequest request)
-    {
-        _gameState.ProcessAction(connection.Username, request.Action);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await conn.SendAsync(0x0301, new ChatMessage
+                    {
+                        Sender = connection.Username,
+                        Content = message.Content,
+                        Timestamp = DateTime.UtcNow
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error broadcasting: {ex.Message}");
+                }
+            });
+        }
     }
 }
 ```
@@ -320,18 +507,22 @@ public class GameHandlers
 
 - **Delegate Caching**: Handler methods are compiled to delegates for faster invocation
 - **Thread Safety**: Uses `SemaphoreSlim` for send locking and `ConcurrentDictionary` for connection management
-- **Buffer Management**: Configurable buffer sizes for optimal memory usage
-- **Connection Pooling**: Efficient connection lookup with O(1) complexity
 - **Binary Protocol**: System byte order protocol for optimal performance on Intel/AMD systems
+- **Async/Await**: Full async operations for scalable I/O handling
+- **Connection Pooling**: Efficient connection lookup with O(1) complexity
+
+## Security Considerations
+
+- **Error Reporting**: Use `ErrorReportingMode.Limited` or `ErrorReportingMode.None` in production
+- **Input Validation**: Always validate and sanitize user input in handlers
+- **Authentication**: Implement proper authentication before setting `connection.User`
+- **Rate Limiting**: Consider implementing rate limiting for resource-intensive operations
+- **TLS/SSL**: Consider wrapping connections with SSL/TLS for encrypted communication
 
 ## Requirements
 
 - .NET 10.0 or higher
 - Operating System: Windows, Linux, or macOS
-
-## Documentation
-
-For detailed documentation and API reference, please visit our [Wiki](https://github.com/yourusername/SocketServerCore/wiki).
 
 ## License
 
