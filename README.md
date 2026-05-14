@@ -526,8 +526,4 @@ public class ChatHandlers
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-**Note**: This is an active project. APIs may change between versions. Please check the [CHANGELOG](CHANGELOG.md) for version history and changes.
+This project is licensed under the MIT License
