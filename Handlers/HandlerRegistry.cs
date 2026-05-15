@@ -11,11 +11,13 @@ public class HandlerRegistry
     private readonly ConcurrentDictionary<ushort, HandlerMethod> _handlers = new();
     private readonly ISerializer _serializer;
     internal ErrorReportingMode ErrorReportingMode;
+    private Action<SocketErrorEventArgs>? _onError;
 
-    public HandlerRegistry(ISerializer serializer, ErrorReportingMode errorReportingMode)
+    public HandlerRegistry(ISerializer serializer, ErrorReportingMode errorReportingMode, Action<SocketErrorEventArgs>? onError = null)
     {
         _serializer = serializer;
         ErrorReportingMode = errorReportingMode;
+        _onError = onError;
     }
 
     public void RegisterHandlers<T>() where T : class, new()
@@ -195,6 +197,8 @@ public class HandlerRegistry
         }
         catch (Exception ex)
         {
+            var errorArgs = new SocketErrorEventArgs(ex, connection, handler.EventId, $"Handler {handler.MethodInfo.Name} execution");
+            _onError?.Invoke(errorArgs);
             Console.WriteLine($"[SocketServer] Error in handler {handler.MethodInfo.Name}: {ex.Message}\nPayload: {System.Text.Encoding.UTF8.GetString(data)}");
             await SendErrorResponseAsync(connection, ex);
         }

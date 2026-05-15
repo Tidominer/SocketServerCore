@@ -21,6 +21,7 @@ public class SocketServer : IDisposable
 
     public Action<SocketConnection>? OnClientConnected;
     public Action<SocketConnection>? OnClientDisconnected;
+    public Action<SocketErrorEventArgs>? OnError;
 
     public bool IsRunning { get; private set; }
     public int ActiveConnections => _connections.Count;
@@ -43,7 +44,7 @@ public class SocketServer : IDisposable
         _host = host;
         _port = port;
         _serializer = serializer ?? new JsonSerializer();
-        _handlerRegistry = new HandlerRegistry(_serializer, ErrorReportingMode);
+        _handlerRegistry = new HandlerRegistry(_serializer, ErrorReportingMode, OnError);
 
         ValidateHostAndPort();
     }
@@ -131,7 +132,7 @@ public class SocketServer : IDisposable
             try
             {
                 var tcpClient = await _listener.AcceptTcpClientAsync(cancellationToken);
-                var connection = new SocketConnection(tcpClient, _serializer, CleanupClient);
+                var connection = new SocketConnection(tcpClient, _serializer, CleanupClient, OnError);
 
                 _connections[connection.Id] = connection;
                 Console.WriteLine($"[SocketServer] Client connected: {connection.RemoteEndPoint} (ID: {connection.Id})");
@@ -149,6 +150,8 @@ public class SocketServer : IDisposable
             {
                 if (!cancellationToken.IsCancellationRequested)
                 {
+                    var errorArgs = new SocketErrorEventArgs(ex, null, null, "Accepting client");
+                    OnError?.Invoke(errorArgs);
                     Console.WriteLine($"[SocketServer] Error accepting client: {ex.Message}");
                 }
             }

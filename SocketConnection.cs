@@ -11,6 +11,7 @@ public class SocketConnection : IDisposable
     private readonly ISerializer _serializer;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly Action<Guid>? _onDisconnect;
+    private readonly Action<SocketErrorEventArgs>? _onError;
     private bool _disposed;
 
     public Guid Id { get; }
@@ -19,7 +20,7 @@ public class SocketConnection : IDisposable
     public object? User { get; set; }
     public DateTime ConnectedAt { get; }
 
-    internal SocketConnection(TcpClient tcpClient, ISerializer serializer, Action<Guid>? onDisconnect = null)
+    internal SocketConnection(TcpClient tcpClient, ISerializer serializer, Action<Guid>? onDisconnect = null, Action<SocketErrorEventArgs>? onError = null)
     {
         _tcpClient = tcpClient;
         _serializer = serializer;
@@ -29,6 +30,7 @@ public class SocketConnection : IDisposable
         IsConnected = true;
         RemoteEndPoint = tcpClient.Client.RemoteEndPoint?.ToString() ?? "Unknown";
         ConnectedAt = DateTime.UtcNow;
+        _onError = onError;
     }
 
     public async Task SendAsync<T>(ushort eventId, T data, CancellationToken ct = default)
@@ -93,6 +95,8 @@ public class SocketConnection : IDisposable
                     }
                     catch (Exception ex)
                     {
+                        var errorArgs = new SocketErrorEventArgs(ex, this, eventId, $"Processing event 0x{eventId:X4}");
+                        _onError?.Invoke(errorArgs);
                         Console.WriteLine($"[SocketServer] Error processing event 0x{eventId:X4}: {ex.Message}");
                     }
                 }
@@ -108,6 +112,8 @@ public class SocketConnection : IDisposable
         }
         catch (Exception ex)
         {
+            var errorArgs = new SocketErrorEventArgs(ex, this, null, "Connection receive loop");
+            _onError?.Invoke(errorArgs);
             Console.WriteLine($"[SocketServer] Connection {Id} error: {ex.Message}");
         }
         finally
