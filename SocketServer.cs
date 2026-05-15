@@ -27,15 +27,16 @@ public class SocketServer : IDisposable
     public int ActiveConnections => _connections.Count;
     public IReadOnlyCollection<SocketConnection> Connections => (IReadOnlyCollection<SocketConnection>)_connections.Values;
 
+    private ErrorReportingMode _errorReportingMode = ErrorReportingMode.Limited;
     public ErrorReportingMode ErrorReportingMode
     {
-        get;
+        get => _errorReportingMode;
         set
         {
-            field = value;
+            _errorReportingMode = value;
             _handlerRegistry.ErrorReportingMode = value;
         }
-    } = ErrorReportingMode.Limited;
+    }
     
     public const ushort ErrorEventId = 0xFFFF;
 
