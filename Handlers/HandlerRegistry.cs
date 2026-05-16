@@ -215,9 +215,12 @@ public class HandlerRegistry
                 if (result is Task task)
                 {
                     await task;
-                    if (task.GetType().IsGenericType && task.GetType().GetGenericTypeDefinition() == typeof(Task<>))
+
+                    // Check if Task has a Result property (Task<T>)
+                    var resultProperty = task.GetType().GetProperty("Result");
+                    if (resultProperty != null)
                     {
-                        return task.GetType().GetProperty("Result")?.GetValue(task);
+                        return resultProperty.GetValue(task);
                     }
                     return null;
                 }
@@ -230,9 +233,12 @@ public class HandlerRegistry
                 if (result is Task task)
                 {
                     await task;
-                    if (task.GetType().IsGenericType && task.GetType().GetGenericTypeDefinition() == typeof(Task<>))
+
+                    // Check if Task has a Result property (Task<T>)
+                    var resultProperty = task.GetType().GetProperty("Result");
+                    if (resultProperty != null)
                     {
-                        return task.GetType().GetProperty("Result")?.GetValue(task);
+                        return resultProperty.GetValue(task);
                     }
                     return null;
                 }
