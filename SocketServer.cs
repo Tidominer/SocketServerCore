@@ -71,9 +71,27 @@ public class SocketServer : IDisposable
 
         try
         {
-            // Resolve host to IP address
-            var ipAddress = await Dns.GetHostEntryAsync(_host, cancellationToken);
-            var localEndPoint = new IPEndPoint(ipAddress.AddressList[0], _port);
+            IPEndPoint localEndPoint;
+
+            // Handle wildcard addresses for listening on all interfaces
+            if (_host == "0.0.0.0" || _host == "*" || _host == "")
+            {
+                localEndPoint = new IPEndPoint(IPAddress.Any, _port);
+            }
+            else if (_host == "::")
+            {
+                localEndPoint = new IPEndPoint(IPAddress.IPv6Any, _port);
+            }
+            else if (IPAddress.TryParse(_host, out var parsedIp))
+            {
+                localEndPoint = new IPEndPoint(parsedIp, _port);
+            }
+            else
+            {
+                // Resolve host to IP address
+                var hostEntry = await Dns.GetHostEntryAsync(_host, cancellationToken);
+                localEndPoint = new IPEndPoint(hostEntry.AddressList[0], _port);
+            }
 
             _listener = new TcpListener(localEndPoint);
             _listener.Start();
